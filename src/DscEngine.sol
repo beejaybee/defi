@@ -30,6 +30,9 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.
 import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
 import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {OracleLib} from "./libraries/Oracles.sol";
+
+
 
 /**
  * @title DSCEngine
@@ -63,6 +66,15 @@ contract DscEngine is ReentrancyGuard {
     error DSCEngine__InvalidPrice();
     error DSCEngine__HealthFactorIsNotBroken();
     error DSCEngine__HealthFactorNotImproved();
+
+
+
+
+    /////////////////////////////////////////////
+    ////////////   TYPES              //////////
+
+
+    using OracleLib for AggregatorV3Interface ;
 
     ////////////////////////////////////////////
     //         State Variables                //
@@ -143,7 +155,7 @@ contract DscEngine is ReentrancyGuard {
         address tokenCollateralAddress, 
         uint256 amountCollateral, 
         uint256 amountDscToMint
-        ) external nonReentrant 
+        ) external  
     {
         depositCollateral(tokenCollateralAddress, amountCollateral);
         mintDsc(amountDscToMint);
@@ -282,7 +294,6 @@ contract DscEngine is ReentrancyGuard {
 
     }
 
-    function getHealthFactor() external view {}
 
 
     /////////////////////////////////////////////////
@@ -324,14 +335,23 @@ contract DscEngine is ReentrancyGuard {
     function _healthFactor(address user) private view returns(uint256) {
         // We need to get user total DSC minted
         // We need to get their total collateral Value
-
-        (uint256 totalDSCMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
-        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
-
-        return (collateralAdjustedForThreshold * PRECISION) / totalDSCMinted;
-
-
+        (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
+        return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
         // return (collateralValueInUsd / totalDSCMinted);
+    }
+
+
+    function _calculateHealthFactor(
+        uint256 totalDscMinted,
+        uint256 collateralValueInUsd
+    )
+        internal
+        pure
+        returns (uint256)
+    {
+        if (totalDscMinted == 0) return type(uint256).max;
+        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
     }
 
         // Check health factor (do they have enough collateral?)
@@ -343,14 +363,15 @@ contract DscEngine is ReentrancyGuard {
         if(userHealthFactor < MIN_HEALTH_FACTOR) {
                 revert DSCEngine__BreaksHealthFactor(userHealthFactor);
             }
-
-
     }
 
     /////////////////////////////////////////////////
     //       Public & external view Functions     //
     /////////////////////////////////////////////////
 
+    function calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd) external pure returns (uint256) {
+          return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
+    }
 
     function getAccountCollateralValue(address user) public view returns(uint256 totalColateralValueInUsd) {
         //loop through each collateral token, get the amount they have deposited, and map it to 
@@ -367,7 +388,7 @@ contract DscEngine is ReentrancyGuard {
 
     function getUsdValue(address token, uint256 amount) public view returns(uint256) {
        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
-       (,int price,,,) = priceFeed.latestRoundData();
+       (,int price,,,) = priceFeed.staleCheckLatestRoundData();
 
        if (price == 0) {
            revert DSCEngine__InvalidPrice();
@@ -381,7 +402,7 @@ contract DscEngine is ReentrancyGuard {
         // Price Of ETH (token)
 
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
-        (,int256 price,,,) = priceFeed.latestRoundData();
+        (,int256 price,,,) = priceFeed.staleCheckLatestRoundData();
 
         // ($10e18 * 1e10) / ($2000e8 * 10e10)
         return (usdAmountInWei * PRECISION)  / (uint256(price) * ADDITIONAL_FEED_PRECISION);
@@ -390,4 +411,58 @@ contract DscEngine is ReentrancyGuard {
     function getAccountInformation(address user) external view returns(uint256 totalDscMinted, uint256 collateralValueInUsd) {
         (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
     }
+
+    function checkMoreThanZero(uint256 amount) external moreThanZero(amount) {
+        // Function intentionally left empty, as we only want to test the modifier
+
+    }
+
+    function getHealthFactor(address user) external view returns (uint256) {
+        return _healthFactor(user);
+    }
+
+    function getPrecision() external pure returns (uint256) {
+        return PRECISION;
+    }
+
+    function getAdditionalFeedPrecision() external pure returns (uint256) {
+        return ADDITIONAL_FEED_PRECISION;
+    }
+
+    function getLiquidationThreshold() external pure returns (uint256) {
+        return LIQUIDATION_THRESHOLD;
+    }
+
+    function getLiquidationBonus() external pure returns (uint256) {
+        return LIQUIDATION_BONUS;
+    }
+
+    function getLiquidationPrecision() external pure returns (uint256) {
+        return LIQUIDATION_PRECISION;
+    }
+
+    function getMinHealthFactor() external pure returns (uint256) {
+        return MIN_HEALTH_FACTOR;
+    }
+
+    function getCollateralTokens() external view returns (address[] memory) {
+        return s_collateralTokens;
+    }
+
+    function getDsc() external view returns (address) {
+        return address(i_dsc);
+    }
+
+    function getCollateralTokenPriceFeed(address token) external view returns (address) {
+        return s_priceFeeds[token];
+    }
+
+    function getCollateralBalance(address token, address user) external view returns (uint256) {
+    return s_collateralDeposited[user][token];
 }
+
+
+}
+
+
+
